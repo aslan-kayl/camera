@@ -233,7 +233,7 @@ async def handle_photo_search(message: Message, bot: Bot) -> None:
     destination = OCR_UPLOAD_DIR / f"{photo.file_unique_id}.jpg"
 
     await bot.download(photo, destination=destination)
-    await message.answer("Фото получено. Распознаю модель через OCR...")
+    await message.answer("Фото получил, ща два сек")
 
     try:
         ocr_result = await ocr_service.recognize_models(destination)
