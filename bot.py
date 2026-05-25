@@ -25,7 +25,7 @@ from db import close_db, init_db
 from import_excel import import_excel
 from models import Product
 from services.ocr_service import OCRService
-from services.product_service import ProductMatch, ProductService
+from services.product_service import ProductService
 from utils.normalize import normalize_model
 
 
@@ -212,18 +212,6 @@ async def send_product(message: Message, product: Product, prefix: str | None = 
     await message.answer(caption)
 
 
-def format_ocr_prefix(match: ProductMatch, candidates: list[str]) -> str:
-    candidates_text = ", ".join(f"<code>{escape(item)}</code>" for item in candidates[:5])
-    if match.match_type == "exact":
-        return f"OCR: точное совпадение по <code>{escape(match.query)}</code>.\nКандидаты: {candidates_text}"
-
-    return (
-        f"OCR: fuzzy совпадение <code>{escape(match.query)}</code>, "
-        f"score <b>{match.score:.0f}</b>.\n"
-        f"Кандидаты: {candidates_text}"
-    )
-
-
 async def handle_photo_search(message: Message, bot: Bot) -> None:
     if not message.photo:
         return
@@ -258,18 +246,12 @@ async def handle_photo_search(message: Message, bot: Bot) -> None:
         return
 
     if match is None:
-        candidates_text = ", ".join(f"<code>{escape(item)}</code>" for item in ocr_result.candidates[:10])
         await message.answer(
-            "Модель распознана, но товара в базе не найдено.\n\n"
-            f"Кандидаты: {candidates_text}"
+            "Модель распознана, но товара в базе не найдено."
         )
         return
 
-    await send_product(
-        message,
-        match.product,
-        prefix=format_ocr_prefix(match, ocr_result.candidates),
-    )
+    await send_product(message, match.product)
 
 
 async def handle_product_search(message: Message, state: FSMContext) -> None:
