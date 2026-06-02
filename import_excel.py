@@ -11,13 +11,12 @@ from xml.etree import ElementTree as ET
 from zipfile import ZipFile
 
 import pandas as pd
-from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import close_db, init_db, session_scope
 from models import Product
-from utils import clean_string, normalize_model, parse_decimal
+from utils import clean_string, normalize_model, parse_decimal, parse_int
 
 
 logger = logging.getLogger(__name__)
@@ -28,6 +27,7 @@ CANONICAL_COLUMNS = {
     "image_path": "Изображение",
     "description": "Описание",
     "price": "Цена",
+    "stock": "Остаток",
 }
 
 COLUMN_ALIASES = {
@@ -63,6 +63,13 @@ COLUMN_ALIASES = {
         "стоимость",
         "прайс",
     },
+    "stock": {
+        "остаток",
+        "stock",
+        "qty",
+        "quantity",
+        "количество",
+    },
 }
 
 
@@ -89,6 +96,13 @@ def _canonical_column(value: Any) -> str | None:
             return canonical_name
 
     return None
+
+
+def _parse_optional_int(value: Any) -> int | None:
+    if clean_string(value) is None:
+        return None
+
+    return parse_int(value)
 
 
 def _find_header_index(raw_df: pd.DataFrame) -> int | None:
@@ -245,10 +259,15 @@ def extract_embedded_images(
 
 
 def validate_columns(df: pd.DataFrame) -> None:
+    required_columns = {
+        CANONICAL_COLUMNS["model"],
+        CANONICAL_COLUMNS["description"],
+        CANONICAL_COLUMNS["price"],
+    }
     missing_columns = [
         column
-        for column in CANONICAL_COLUMNS.values()
-        if column != CANONICAL_COLUMNS["image_path"] and column not in df.columns
+        for column in required_columns
+        if column not in df.columns
     ]
     if missing_columns:
         available_columns = ", ".join(str(column) for column in df.columns)
@@ -273,9 +292,22 @@ def build_product_rows(
         if not model or not normalized_model:
             continue
 
+        if normalized_model in products_by_model:
+            logger.warning(
+                "Duplicate model in Excel found, latest row wins: normalized_model=%s row=%s sheet=%s",
+                normalized_model,
+                row_index,
+                clean_string(row.get("__sheet_name")),
+            )
+
         cell_image_path = (
             clean_string(row[CANONICAL_COLUMNS["image_path"]])
             if CANONICAL_COLUMNS["image_path"] in row.index
+            else None
+        )
+        stock = (
+            _parse_optional_int(row[CANONICAL_COLUMNS["stock"]])
+            if CANONICAL_COLUMNS["stock"] in row.index
             else None
         )
 
@@ -284,6 +316,7 @@ def build_product_rows(
             "normalized_model": normalized_model,
             "description": clean_string(row[CANONICAL_COLUMNS["description"]]),
             "price": parse_decimal(row[CANONICAL_COLUMNS["price"]]),
+            "stock": stock,
             "image_path": cell_image_path or embedded_image_paths.get(int(row_index)),
         }
 
@@ -297,11 +330,12 @@ async def upsert_products(session: AsyncSession, rows: list[dict[str, Any]]) -> 
     statement = insert(Product).values(rows)
     await session.execute(
         statement.on_conflict_do_update(
-            constraint="uq_products_normalized_model",
+            index_elements=[Product.normalized_model],
             set_={
                 "model": statement.excluded.model,
                 "description": statement.excluded.description,
                 "price": statement.excluded.price,
+                "stock": statement.excluded.stock,
                 "image_path": statement.excluded.image_path,
             },
         )
@@ -331,21 +365,6 @@ async def import_excel(path: Path) -> int:
     return imported_count
 
 
-async def search_products(query: str, limit: int = 20) -> list[Product]:
-    normalized_query = normalize_model(query)
-    if not normalized_query:
-        return []
-
-    async with session_scope() as session:
-        result = await session.scalars(
-            select(Product)
-            .where(Product.normalized_model.ilike(f"%{normalized_query}%"))
-            .order_by(Product.normalized_model)
-            .limit(limit)
-        )
-        return list(result)
-
-
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Import products from Excel to PostgreSQL")
     parser.add_argument(
@@ -353,11 +372,6 @@ async def main() -> None:
         nargs="?",
         default="data/prices.xlsx",
         help="Path to Excel file",
-    )
-    parser.add_argument(
-        "--recreate",
-        action="store_true",
-        help="Drop and recreate products table before import",
     )
     args = parser.parse_args()
 
@@ -370,7 +384,7 @@ async def main() -> None:
     if not path.exists():
         raise FileNotFoundError(f"Excel file not found: {path}")
 
-    await init_db(drop_existing=args.recreate)
+    await init_db()
     await import_excel(path)
     await close_db()
 

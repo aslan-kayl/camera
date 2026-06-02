@@ -26,12 +26,12 @@ from import_excel import import_excel
 from models import Product
 from services.ocr_service import OCRService
 from services.product_service import ProductService
+from services.temp_file_service import cleanup_old_temp_files, delete_temp_file, save_temp_photo
 from utils.normalize import normalize_model
 
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = Path("data/uploads")
-OCR_UPLOAD_DIR = Path("data/ocr_uploads")
 SEARCH_BUTTON = "Поиск товара"
 UPLOAD_EXCEL_BUTTON = "Загрузить Excel"
 product_service = ProductService()
@@ -216,15 +216,16 @@ async def handle_photo_search(message: Message, bot: Bot) -> None:
     if not message.photo:
         return
 
-    OCR_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     photo = message.photo[-1]
-    destination = OCR_UPLOAD_DIR / f"{photo.file_unique_id}.jpg"
+    destination = await save_temp_photo(bot, photo)
 
-    await bot.download(photo, destination=destination)
     await message.answer("Фото получил, ща два сек")
 
     try:
-        ocr_result = await ocr_service.recognize_models(destination)
+        try:
+            ocr_result = await ocr_service.recognize_models(destination)
+        finally:
+            delete_temp_file(destination)
     except Exception as exc:
         logger.exception("OCR failed for image: %s", destination)
         await message.answer(f"Не удалось распознать фото: <code>{escape(str(exc))}</code>")
@@ -284,6 +285,7 @@ async def handle_product_search(message: Message, state: FSMContext) -> None:
 
 async def main() -> None:
     setup_logging()
+    cleanup_old_temp_files()
     await init_db()
 
     bot = Bot(

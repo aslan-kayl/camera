@@ -58,6 +58,12 @@ async def init_db(drop_existing: bool = False) -> None:
         await conn.execute(
             text("ALTER TABLE products ADD COLUMN IF NOT EXISTS stock integer")
         )
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_products_normalized_model "
+                "ON products (normalized_model)"
+            )
+        )
 
     logger.info("Database schema is ready")
 

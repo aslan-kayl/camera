@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import DateTime, Index, Integer, Numeric, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Index, Integer, Numeric, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -14,8 +14,7 @@ class Base(DeclarativeBase):
 class Product(Base):
     __tablename__ = "products"
     __table_args__ = (
-        UniqueConstraint("normalized_model", name="uq_products_normalized_model"),
-        Index("ix_products_normalized_model", "normalized_model"),
+        Index("uq_products_normalized_model", "normalized_model", unique=True),
         Index(
             "ix_products_normalized_model_trgm",
             "normalized_model",
