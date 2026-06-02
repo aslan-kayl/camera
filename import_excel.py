@@ -157,6 +157,40 @@ def _normalize_headers(headers: list[Any]) -> list[str]:
     return normalized_headers
 
 
+def _assign_missing_price_column(df: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    if CANONICAL_COLUMNS["price"] in df.columns:
+        return df
+
+    candidate_columns = [
+        column
+        for column in df.columns
+        if str(column).startswith("__empty_")
+    ]
+    best_column: str | None = None
+    best_score = 0
+
+    for column in candidate_columns:
+        values = df[column].dropna()
+        if values.empty:
+            continue
+
+        numeric_values = pd.to_numeric(values, errors="coerce")
+        score = int(numeric_values.notna().sum())
+        if score > best_score:
+            best_column = str(column)
+            best_score = score
+
+    if best_column is None or best_score == 0:
+        return df
+
+    logger.warning(
+        "Price column header is missing, inferred %s as price column for sheet=%s",
+        best_column,
+        sheet_name,
+    )
+    return df.rename(columns={best_column: CANONICAL_COLUMNS["price"]})
+
+
 def _relationship_path(drawing_path: str) -> str:
     directory, filename = posixpath.split(drawing_path)
     return posixpath.join(directory, "_rels", f"{filename}.rels")
@@ -180,6 +214,7 @@ def read_products_excel(path: Path) -> pd.DataFrame:
         df = raw_df.iloc[header_index + 1 :].copy()
         df.columns = headers
         df = df.dropna(how="all")
+        df = _assign_missing_price_column(df, sheet_name)
         df["__sheet_name"] = sheet_name
         product_frames.append(df)
 
