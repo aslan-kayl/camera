@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-from decimal import Decimal
 from html import escape
 import logging
 import os
@@ -12,28 +11,25 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
-    FSInputFile,
-    KeyboardButton,
-    Message,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-)
+from aiogram.fsm.state import State, StatesGroup, default_state
+from aiogram.types import FSInputFile, Message, ReplyKeyboardRemove
 
 from db import close_db, init_db
+from handlers import add_product as add_product_handlers
+from handlers import search as search_handlers
+from keyboards import ADD_PRODUCT_BUTTON, UPLOAD_EXCEL_BUTTON, main_keyboard
 from import_excel import import_excel
 from models import Product
 from services.ocr_service import OCRService
 from services.product_service import ProductService
 from services.temp_file_service import cleanup_old_temp_files, delete_temp_file, save_temp_photo
+from states.add_product import AddProduct
+from utils.formatting import format_price
 from utils.normalize import normalize_model
 
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = Path("data/uploads")
-SEARCH_BUTTON = "Поиск товара"
-UPLOAD_EXCEL_BUTTON = "Загрузить Excel"
 product_service = ProductService()
 ocr_service = OCRService()
 
@@ -79,21 +75,6 @@ def is_admin(user_id: int | None) -> bool:
     return bool(user_id) and (not admin_ids or user_id in admin_ids)
 
 
-def main_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=SEARCH_BUTTON)],
-            [KeyboardButton(text=UPLOAD_EXCEL_BUTTON)],
-        ],
-        resize_keyboard=True,
-        input_field_placeholder="Введите модель или выберите действие",
-    )
-
-
-def format_price(value: Decimal) -> str:
-    return f"{value:,.2f}".replace(",", " ")
-
-
 def truncate_text(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
@@ -130,15 +111,9 @@ def build_photo(value: str | None) -> str | FSInputFile | None:
 
 async def cmd_start(message: Message) -> None:
     await message.answer(
-        "Отправьте модель или часть модели товара, например: <code>7108</code>.\n"
+        "Отправьте название, модель или часть названия товара.\n"
+        "Например: <code>коммутатор</code>, <code>адаптер</code>, <code>7108</code>.\n"
         "Можно также отправить фото этикетки товара для OCR-поиска.",
-        reply_markup=main_keyboard(),
-    )
-
-
-async def handle_search_button(message: Message) -> None:
-    await message.answer(
-        "Введите модель или часть модели товара.",
         reply_markup=main_keyboard(),
     )
 
@@ -205,6 +180,9 @@ async def send_product(message: Message, product: Product, prefix: str | None = 
     if prefix:
         caption = f"{prefix}\n\n{caption}"
 
+    if photo is not None and len(caption) > 1024:
+        caption = format_product(product, description_limit=350)
+
     if photo is not None:
         await message.answer_photo(photo=photo, caption=caption)
         return
@@ -255,34 +233,6 @@ async def handle_photo_search(message: Message, bot: Bot) -> None:
     await send_product(message, match.product)
 
 
-async def handle_product_search(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    query = (message.text or "").strip()
-    normalized_query = normalize_model(query)
-
-    if len(normalized_query) < 2:
-        await message.answer("Введите минимум 2 символа модели.")
-        return
-
-    products = await product_service.search_by_text(query)
-    if not products:
-        await message.answer("Товар не найден.")
-        logger.info("Product not found for query=%r normalized=%r", query, normalized_query)
-        return
-
-    logger.info(
-        "Found %s products for query=%r normalized=%r",
-        len(products),
-        query,
-        normalized_query,
-    )
-
-    await message.answer(f"Найдено товаров: <b>{len(products)}</b>.")
-
-    for product in products:
-        await send_product(message, product)
-
-
 async def main() -> None:
     setup_logging()
     cleanup_old_temp_files()
@@ -296,12 +246,70 @@ async def main() -> None:
 
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_start, Command("help"))
-    dp.message.register(handle_search_button, F.text == SEARCH_BUTTON)
     dp.message.register(ask_excel_file, F.text == UPLOAD_EXCEL_BUTTON)
+    dp.message.register(
+        search_handlers.handle_product_search,
+        default_state,
+        F.text,
+    )
+    dp.message.register(
+        add_product_handlers.start_add_product,
+        F.text == ADD_PRODUCT_BUTTON,
+    )
+    dp.message.register(
+        add_product_handlers.cancel_add_product,
+        AddProduct,
+        F.text.casefold() == "отмена",
+    )
+    dp.message.register(
+        add_product_handlers.cancel_add_product,
+        Command("cancel"),
+        AddProduct,
+    )
+    dp.message.register(
+        add_product_handlers.handle_model,
+        AddProduct.waiting_model,
+        F.text,
+    )
+    dp.message.register(
+        add_product_handlers.handle_wrong_model_input,
+        AddProduct.waiting_model,
+    )
+    dp.message.register(
+        add_product_handlers.handle_photo,
+        AddProduct.waiting_photo,
+        F.photo,
+    )
+    dp.message.register(
+        add_product_handlers.skip_photo,
+        AddProduct.waiting_photo,
+        F.text.casefold() == add_product_handlers.SKIP_PHOTO_TEXT,
+    )
+    dp.message.register(
+        add_product_handlers.handle_wrong_photo_input,
+        AddProduct.waiting_photo,
+    )
+    dp.message.register(
+        add_product_handlers.handle_description,
+        AddProduct.waiting_description,
+        F.text,
+    )
+    dp.message.register(
+        add_product_handlers.handle_wrong_description_input,
+        AddProduct.waiting_description,
+    )
+    dp.message.register(
+        add_product_handlers.handle_price,
+        AddProduct.waiting_price,
+        F.text,
+    )
+    dp.message.register(
+        add_product_handlers.handle_wrong_price_input,
+        AddProduct.waiting_price,
+    )
     dp.message.register(handle_excel_upload, UploadExcel.waiting_file, F.document)
     dp.message.register(handle_wrong_excel_upload, UploadExcel.waiting_file)
     dp.message.register(handle_photo_search, F.photo)
-    dp.message.register(handle_product_search, F.text)
 
     try:
         logger.info("Bot polling started")
