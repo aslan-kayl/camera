@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
 import logging
 
-from sqlalchemy import case, or_, select
+from sqlalchemy import case, select
 
-from db import SessionLocal, session_scope
+from db import SessionLocal
 from models import Product
 from utils.normalize import normalize_model
-from utils.search import escape_ilike
 
 
 logger = logging.getLogger(__name__)
@@ -24,68 +22,18 @@ class ProductMatch:
 
 
 class ProductService:
-    async def get_by_normalized_model(self, normalized_model: str) -> Product | None:
-        if not normalized_model:
-            return None
-
-        async with SessionLocal() as session:
-            return await session.scalar(
-                select(Product).where(Product.normalized_model == normalized_model)
-            )
-
-    async def create_product(
-        self,
-        *,
-        model: str,
-        normalized_model: str,
-        description: str | None,
-        price: Decimal,
-        image_path: str | None = None,
-    ) -> Product:
-        product = Product(
-            model=model,
-            normalized_model=normalized_model,
-            description=description,
-            price=price,
-            image_path=image_path,
-        )
-
-        async with session_scope() as session:
-            session.add(product)
-            await session.flush()
-            await session.refresh(product)
-
-        logger.info(
-            "Product created: id=%s model=%r normalized_model=%r",
-            product.id,
-            product.model,
-            product.normalized_model,
-        )
-        return product
-
     async def search_by_text(self, query: str) -> list[Product]:
-        cleaned_query = (query or "").strip()
-        if not cleaned_query:
+        normalized_query = normalize_model(query)
+        if not normalized_query:
             return []
-
-        normalized_query = normalize_model(cleaned_query)
-        escaped_query = escape_ilike(cleaned_query)
-        pattern = f"%{escaped_query}%"
-        prefix_pattern = f"{escaped_query}%"
-
-        search_conditions = [Product.model.ilike(pattern, escape="\\")]
-        if normalized_query:
-            search_conditions.append(Product.normalized_model == normalized_query)
 
         async with SessionLocal() as session:
             statement = (
                 select(Product)
-                .where(or_(*search_conditions))
+                .where(Product.normalized_model.ilike(f"%{normalized_query}%"))
                 .order_by(
                     case((Product.normalized_model == normalized_query, 0), else_=1),
-                    case((Product.model.ilike(escaped_query, escape="\\"), 0), else_=1),
-                    case((Product.model.ilike(prefix_pattern, escape="\\"), 0), else_=1),
-                    Product.model,
+                    Product.normalized_model,
                 )
             )
             result = await session.scalars(statement)
@@ -93,7 +41,7 @@ class ProductService:
 
         logger.info(
             "Text product search query=%r normalized=%r count=%s",
-            cleaned_query,
+            query,
             normalized_query,
             len(products),
         )

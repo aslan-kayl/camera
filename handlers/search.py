@@ -9,6 +9,7 @@ from aiogram.types import Message
 from keyboards import ADD_PRODUCT_BUTTON, UPLOAD_EXCEL_BUTTON, main_keyboard
 from services.product_service import ProductService
 from utils.normalize import normalize_model
+from utils.search import is_model_like_query
 
 
 logger = logging.getLogger(__name__)
@@ -31,8 +32,15 @@ async def perform_product_search(message: Message, query: str) -> None:
         await message.answer("Введите запрос для поиска.")
         return
 
-    normalized_query = normalize_model(cleaned_query) or None
-    search_type = "text"
+    if is_model_like_query(cleaned_query):
+        normalized_query = normalize_model(cleaned_query)
+        if len(normalized_query) < 2:
+            await message.answer("Введите минимум 2 символа модели.")
+            return
+        search_type = "model"
+    else:
+        normalized_query = None
+        search_type = "words"
 
     try:
         products = await product_service.search_by_text(cleaned_query)
