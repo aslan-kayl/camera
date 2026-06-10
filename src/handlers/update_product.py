@@ -18,6 +18,8 @@ from keyboards import (
     update_field_keyboard,
     update_next_keyboard,
 )
+from models import User
+from services.audit_service import AuditAction, AuditService
 from services.image_service import save_product_photo
 from services.product_service import ProductService
 from states.update_product import UpdateProduct
@@ -28,6 +30,7 @@ from utils.normalize import normalize_model, parse_decimal
 logger = logging.getLogger(__name__)
 
 product_service = ProductService()
+audit_service = AuditService()
 
 
 async def start_update_product(message: Message, state: FSMContext) -> None:
@@ -131,14 +134,23 @@ async def _get_product_id(message: Message, state: FSMContext) -> int | None:
     return product_id
 
 
-async def _finish_success(message: Message, state: FSMContext, product) -> None:
+async def _finish_success(
+    message: Message, state: FSMContext, product, db_user: User | None = None
+) -> None:
     # Keep product_id in the FSM so the user can continue editing the same item.
     await state.update_data(product_id=product.id)
     await state.set_state(UpdateProduct.waiting_next)
+    telegram_id = message.from_user.id if message.from_user else None
     logger.info(
         "Product successfully updated: id=%s user_id=%s",
         product.id,
-        message.from_user.id if message.from_user else None,
+        telegram_id,
+    )
+    await audit_service.log(
+        AuditAction.UPDATE_PRODUCT,
+        telegram_id=telegram_id,
+        user_id=db_user.id if db_user else None,
+        details=f"id={product.id} model={product.model!r} price={product.price}",
     )
     await message.answer(
         "✅ Товар успешно изменён\n\n"
@@ -180,7 +192,9 @@ async def _finish_failure(message: Message, state: FSMContext) -> None:
     await message.answer("❌ Товар не обновлён. Попробуйте позже.", reply_markup=main_keyboard())
 
 
-async def handle_new_photo(message: Message, state: FSMContext, bot: Bot) -> None:
+async def handle_new_photo(
+    message: Message, state: FSMContext, bot: Bot, db_user: User | None = None
+) -> None:
     product_id = await _get_product_id(message, state)
     if product_id is None:
         return
@@ -201,10 +215,12 @@ async def handle_new_photo(message: Message, state: FSMContext, bot: Bot) -> Non
         await _finish_failure(message, state)
         return
 
-    await _finish_success(message, state, product)
+    await _finish_success(message, state, product, db_user)
 
 
-async def handle_new_model(message: Message, state: FSMContext) -> None:
+async def handle_new_model(
+    message: Message, state: FSMContext, db_user: User | None = None
+) -> None:
     product_id = await _get_product_id(message, state)
     if product_id is None:
         return
@@ -250,10 +266,12 @@ async def handle_new_model(message: Message, state: FSMContext) -> None:
         await _finish_failure(message, state)
         return
 
-    await _finish_success(message, state, product)
+    await _finish_success(message, state, product, db_user)
 
 
-async def handle_new_price(message: Message, state: FSMContext) -> None:
+async def handle_new_price(
+    message: Message, state: FSMContext, db_user: User | None = None
+) -> None:
     product_id = await _get_product_id(message, state)
     if product_id is None:
         return
@@ -277,7 +295,7 @@ async def handle_new_price(message: Message, state: FSMContext) -> None:
         await _finish_failure(message, state)
         return
 
-    await _finish_success(message, state, product)
+    await _finish_success(message, state, product, db_user)
 
 
 async def handle_wrong_model_input(message: Message) -> None:

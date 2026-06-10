@@ -14,15 +14,18 @@ CONTINUE_UPDATE_BUTTON = "🔄 Продолжить обновление"
 MAIN_MENU_BUTTON = "🏠 Главное меню"
 
 
-def main_keyboard() -> ReplyKeyboardMarkup:
-    return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text=SEARCH_BUTTON)],
+def main_keyboard(is_admin: bool = True) -> ReplyKeyboardMarkup:
+    # USERs may only search/view, so admin-only buttons are hidden for them.
+    keyboard = [[KeyboardButton(text=SEARCH_BUTTON)]]
+    if is_admin:
+        keyboard += [
             [KeyboardButton(text=UPLOAD_EXCEL_BUTTON)],
             [KeyboardButton(text=ADD_PRODUCT_BUTTON)],
             [KeyboardButton(text=DELETE_PRODUCT_BUTTON)],
             [KeyboardButton(text=UPDATE_PRODUCT_BUTTON)],
-        ],
+        ]
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
         resize_keyboard=True,
         input_field_placeholder="Введите название, модель или часть названия",
     )

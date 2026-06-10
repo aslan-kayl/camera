@@ -8,6 +8,8 @@ from aiogram.types import Message
 from sqlalchemy.exc import IntegrityError
 
 from keyboards import cancel_keyboard, main_keyboard
+from models import User
+from services.audit_service import AuditAction, AuditService
 from services.image_service import save_product_photo
 from services.product_service import ProductService
 from states.add_product import AddProduct
@@ -18,6 +20,7 @@ from utils.normalize import normalize_model, parse_decimal
 logger = logging.getLogger(__name__)
 
 product_service = ProductService()
+audit_service = AuditService()
 
 
 async def start_add_product(message: Message, state: FSMContext) -> None:
@@ -78,7 +81,7 @@ async def handle_model(message: Message, state: FSMContext) -> None:
     await message.answer("Введите цену товара.", reply_markup=cancel_keyboard())
 
 
-async def handle_price(message: Message, state: FSMContext) -> None:
+async def handle_price(message: Message, state: FSMContext, db_user: User | None = None) -> None:
     raw_price = (message.text or "").strip()
     price = parse_decimal(raw_price)
 
@@ -155,12 +158,19 @@ async def handle_price(message: Message, state: FSMContext) -> None:
         )
         return
 
+    telegram_id = message.from_user.id if message.from_user else None
     logger.info(
         "Product successfully added: id=%s model=%r normalized_model=%r user_id=%s",
         product.id,
         product.model,
         product.normalized_model,
-        message.from_user.id if message.from_user else None,
+        telegram_id,
+    )
+    await audit_service.log(
+        AuditAction.ADD_PRODUCT,
+        telegram_id=telegram_id,
+        user_id=db_user.id if db_user else None,
+        details=f"id={product.id} model={product.model!r} price={product.price}",
     )
     await state.clear()
     await message.answer(

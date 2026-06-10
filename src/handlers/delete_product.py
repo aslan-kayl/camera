@@ -6,6 +6,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from keyboards import cancel_keyboard, confirm_delete_keyboard, main_keyboard
+from models import User
+from services.audit_service import AuditAction, AuditService
 from services.product_service import ProductService
 from states.delete_product import DeleteProduct
 from utils.formatting import format_price
@@ -15,6 +17,7 @@ from utils.normalize import normalize_model
 logger = logging.getLogger(__name__)
 
 product_service = ProductService()
+audit_service = AuditService()
 
 
 async def start_delete_product(message: Message, state: FSMContext) -> None:
@@ -83,7 +86,9 @@ async def handle_model(message: Message, state: FSMContext) -> None:
     )
 
 
-async def confirm_delete_product(message: Message, state: FSMContext) -> None:
+async def confirm_delete_product(
+    message: Message, state: FSMContext, db_user: User | None = None
+) -> None:
     data = await state.get_data()
     product_id = data.get("product_id")
 
@@ -118,10 +123,17 @@ async def confirm_delete_product(message: Message, state: FSMContext) -> None:
         )
         return
 
+    telegram_id = message.from_user.id if message.from_user else None
     logger.info(
         "Product successfully deleted: product_id=%s user_id=%s",
         product_id,
-        message.from_user.id if message.from_user else None,
+        telegram_id,
+    )
+    await audit_service.log(
+        AuditAction.DELETE_PRODUCT,
+        telegram_id=telegram_id,
+        user_id=db_user.id if db_user else None,
+        details=f"id={product_id}",
     )
     await message.answer("✅ Товар удалён.", reply_markup=main_keyboard())
 

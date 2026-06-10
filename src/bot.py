@@ -63,10 +63,14 @@ from keyboards import (
     UPLOAD_EXCEL_BUTTON,
     main_keyboard,
 )
-from models import Product
+from middlewares.access import AccessControlMiddleware
+from models import Product, User
+from services.access_control import admin_only
+from services.audit_service import AuditAction, AuditService
 from services.ocr_service import OCRService
 from services.product_service import ProductService
 from services.temp_file_service import cleanup_old_temp_files, delete_temp_file, save_temp_photo
+from services.user_service import ROLE_ADMIN
 from states.add_product import AddProduct
 from states.delete_product import DeleteProduct
 from states.update_product import UpdateProduct
@@ -77,6 +81,7 @@ logger = logging.getLogger(__name__)
 UPLOAD_DIR = Path("data/uploads")
 product_service = ProductService()
 ocr_service = OCRService()
+audit_service = AuditService()
 
 
 class UploadExcel(StatesGroup):
@@ -96,28 +101,6 @@ def get_bot_token() -> str:
         raise RuntimeError("BOT_TOKEN environment variable is required")
 
     return token
-
-
-def get_admin_ids() -> set[int]:
-    raw_value = os.getenv("ADMIN_IDS", "")
-    if not raw_value.strip():
-        return set()
-
-    admin_ids: set[int] = set()
-    for value in raw_value.split(","):
-        value = value.strip()
-        if value:
-            try:
-                admin_ids.add(int(value))
-            except ValueError:
-                logger.warning("Invalid ADMIN_IDS value ignored: %r", value)
-
-    return admin_ids
-
-
-def is_admin(user_id: int | None) -> bool:
-    admin_ids = get_admin_ids()
-    return bool(user_id) and (not admin_ids or user_id in admin_ids)
 
 
 def format_price(value: Decimal) -> str:
@@ -158,54 +141,79 @@ def build_photo(value: str | None) -> str | FSInputFile | None:
     return None
 
 
-async def cmd_start(message: Message) -> None:
+async def cmd_start(message: Message, role: str) -> None:
+    telegram_id = message.from_user.id if message.from_user else None
+    logger.info("User entry: telegram_id=%s role=%s", telegram_id, role)
     await message.answer(
         "Отправьте модель или часть модели товара, например: <code>7108</code>.\n"
         "Можно также отправить фото этикетки товара для OCR-поиска.",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(is_admin=role == ROLE_ADMIN),
     )
 
 
-async def handle_search_button(message: Message) -> None:
+async def handle_search_button(message: Message, role: str) -> None:
     await message.answer(
         "Введите модель или часть модели товара.",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard(is_admin=role == ROLE_ADMIN),
     )
 
 
 async def ask_excel_file(message: Message, state: FSMContext) -> None:
-    if not is_admin(message.from_user.id if message.from_user else None):
-        await message.answer("Загрузка Excel доступна только администратору.")
-        return
-
     await state.set_state(UploadExcel.waiting_file)
     await message.answer(
-        "Отправьте Excel-файл в формате <code>.xlsx</code> или <code>.xlsm</code>.",
+        "Отправьте Excel-файл в формате <code>.xlsx</code>.",
         reply_markup=ReplyKeyboardRemove(),
     )
 
 
-async def handle_excel_upload(message: Message, state: FSMContext, bot: Bot) -> None:
+async def handle_excel_upload(
+    message: Message, state: FSMContext, bot: Bot, db_user: User
+) -> None:
+    user_id = message.from_user.id if message.from_user else None
+    db_user_id = db_user.id if db_user else None
+
     if not message.document:
-        await message.answer("Пришлите Excel-файл документом.")
+        await message.answer(
+            "Пришлите Excel-файл документом (<code>.xlsx</code>), а не текстом или фото."
+        )
         return
 
     file_name = message.document.file_name or ""
     suffix = Path(file_name).suffix.lower()
-    if suffix not in {".xlsx", ".xlsm"}:
-        await message.answer("Поддерживаются только Excel-файлы <code>.xlsx</code> и <code>.xlsm</code>.")
+    if suffix != ".xlsx":
+        logger.warning(
+            "Excel import rejected: user_id=%s file=%r reason=unsupported_extension",
+            user_id,
+            file_name,
+        )
+        await message.answer(
+            "❌ Неверный формат файла. Поддерживается только <code>.xlsx</code>.\n"
+            "Сохраните таблицу как «Книга Excel (.xlsx)» и пришлите снова."
+        )
         return
 
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     destination = UPLOAD_DIR / f"{message.document.file_unique_id}{suffix}"
 
     await bot.download(message.document, destination=destination)
+    logger.info("Excel import started: user_id=%s file=%r", user_id, file_name)
     await message.answer("Файл получен. Начинаю импорт в PostgreSQL...")
 
     try:
         imported_count = await import_excel(destination)
     except Exception as exc:
-        logger.exception("Excel import failed: %s", destination)
+        logger.exception(
+            "Excel import failed: user_id=%s file=%r path=%s",
+            user_id,
+            file_name,
+            destination,
+        )
+        await audit_service.log(
+            AuditAction.ERROR,
+            telegram_id=user_id,
+            user_id=db_user_id,
+            details=f"IMPORT_EXCEL failed for {file_name!r}: {exc}",
+        )
         await message.answer(
             "Не удалось импортировать Excel. Проверьте колонки: "
             "<code>Наименование/Model/IMOU Model</code>, "
@@ -219,6 +227,18 @@ async def handle_excel_upload(message: Message, state: FSMContext, bot: Bot) -> 
         return
 
     await state.clear()
+    logger.info(
+        "Excel import finished: user_id=%s file=%r imported=%s",
+        user_id,
+        file_name,
+        imported_count,
+    )
+    await audit_service.log(
+        AuditAction.IMPORT_EXCEL,
+        telegram_id=user_id,
+        user_id=db_user_id,
+        details=f"file={file_name!r} imported={imported_count}",
+    )
     await message.answer(
         f"Импорт завершен. Загружено товаров: <b>{imported_count}</b>.",
         reply_markup=main_keyboard(),
@@ -245,6 +265,9 @@ async def send_product(message: Message, product: Product, prefix: str | None = 
 async def handle_photo_search(message: Message, bot: Bot) -> None:
     if not message.photo:
         return
+
+    user_id = message.from_user.id if message.from_user else None
+    logger.info("Photo search started: user_id=%s", user_id)
 
     photo = message.photo[-1]
     destination = await save_temp_photo(bot, photo)
@@ -309,8 +332,10 @@ async def handle_photo_search(message: Message, bot: Bot) -> None:
 
 async def handle_product_search(message: Message, state: FSMContext) -> None:
     await state.clear()
+    user_id = message.from_user.id if message.from_user else None
     query = (message.text or "").strip()
     normalized_query = normalize_model(query)
+    logger.info("Text search: user_id=%s query=%r", user_id, query)
 
     if len(normalized_query) < 2:
         await message.answer("Введите минимум 2 символа модели.")
@@ -319,7 +344,12 @@ async def handle_product_search(message: Message, state: FSMContext) -> None:
     products = await product_service.search_by_text(query)
     if not products:
         await message.answer("Товар не найден.")
-        logger.info("Product not found for query=%r normalized=%r", query, normalized_query)
+        logger.info(
+            "Product not found: user_id=%s query=%r normalized=%r",
+            user_id,
+            query,
+            normalized_query,
+        )
         return
 
     logger.info(
@@ -346,16 +376,22 @@ async def main() -> None:
     )
     dp = Dispatcher()
 
+    # Whitelist gate runs before any handler, so every access check happens
+    # before business logic. Authorized users get a `role` injected into data.
+    dp.message.outer_middleware(AccessControlMiddleware())
+
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_start, Command("help"))
     dp.message.register(handle_search_button, F.text == SEARCH_BUTTON)
-    dp.message.register(ask_excel_file, F.text == UPLOAD_EXCEL_BUTTON)
-    dp.message.register(handle_excel_upload, UploadExcel.waiting_file, F.document)
+    # Catalog mutations (Excel import, add/update/delete) are ADMIN-only - the
+    # admin_only guard rejects non-admins before any flow can start.
+    dp.message.register(admin_only(ask_excel_file), F.text == UPLOAD_EXCEL_BUTTON)
+    dp.message.register(admin_only(handle_excel_upload), UploadExcel.waiting_file, F.document)
     dp.message.register(handle_wrong_excel_upload, UploadExcel.waiting_file)
 
     # Add-product flow: photo -> model -> price. State-filtered handlers must
     # be registered before the catch-all photo/text search handlers below.
-    dp.message.register(start_add_product, F.text == ADD_PRODUCT_BUTTON)
+    dp.message.register(admin_only(start_add_product), F.text == ADD_PRODUCT_BUTTON)
     dp.message.register(cancel_add_product, Command("cancel"))
     dp.message.register(cancel_add_product, StateFilter(AddProduct), F.text == CANCEL_BUTTON)
     dp.message.register(handle_photo, AddProduct.waiting_photo, F.photo)
@@ -366,7 +402,7 @@ async def main() -> None:
     dp.message.register(handle_wrong_price_input, AddProduct.waiting_price)
 
     # Delete-product flow: model -> confirm -> delete.
-    dp.message.register(start_delete_product, F.text == DELETE_PRODUCT_BUTTON)
+    dp.message.register(admin_only(start_delete_product), F.text == DELETE_PRODUCT_BUTTON)
     dp.message.register(cancel_delete_product, StateFilter(DeleteProduct), F.text == CANCEL_BUTTON)
     dp.message.register(delete_handle_model, DeleteProduct.waiting_model, F.text)
     dp.message.register(delete_handle_wrong_model_input, DeleteProduct.waiting_model)
@@ -374,7 +410,7 @@ async def main() -> None:
     dp.message.register(handle_wrong_confirm_input, DeleteProduct.waiting_confirm)
 
     # Update-product flow: model -> choose field -> new value.
-    dp.message.register(start_update_product, F.text == UPDATE_PRODUCT_BUTTON)
+    dp.message.register(admin_only(start_update_product), F.text == UPDATE_PRODUCT_BUTTON)
     dp.message.register(cancel_update_product, StateFilter(UpdateProduct), F.text == CANCEL_BUTTON)
     dp.message.register(update_handle_model, UpdateProduct.waiting_model, F.text)
     dp.message.register(update_handle_wrong_model_input, UpdateProduct.waiting_model)
