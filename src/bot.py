@@ -22,9 +22,11 @@ from aiogram.types import (
 from db import close_db, init_db
 from handlers.add_product import (
     cancel_add_product,
+    handle_description,
     handle_model,
     handle_photo,
     handle_price,
+    handle_wrong_description_input,
     handle_wrong_model_input,
     handle_wrong_photo_input,
     handle_wrong_price_input,
@@ -47,7 +49,9 @@ from handlers.update_product import (
     start_update_product,
 )
 from handlers.update_product import handle_model as update_handle_model
+from handlers.update_product import handle_new_description as update_handle_new_description
 from handlers.update_product import handle_new_model as update_handle_new_model
+from handlers.update_product import handle_wrong_description_input as update_handle_wrong_description_input
 from handlers.update_product import handle_wrong_field_input as update_handle_wrong_field_input
 from handlers.update_product import handle_wrong_model_input as update_handle_wrong_model_input
 from handlers.update_product import handle_wrong_photo_input as update_handle_wrong_photo_input
@@ -398,6 +402,8 @@ async def main() -> None:
     dp.message.register(handle_wrong_photo_input, AddProduct.waiting_photo)
     dp.message.register(handle_model, AddProduct.waiting_model, F.text)
     dp.message.register(handle_wrong_model_input, AddProduct.waiting_model)
+    dp.message.register(handle_description, AddProduct.waiting_description, F.text)
+    dp.message.register(handle_wrong_description_input, AddProduct.waiting_description)
     dp.message.register(handle_price, AddProduct.waiting_price, F.text)
     dp.message.register(handle_wrong_price_input, AddProduct.waiting_price)
 
@@ -420,6 +426,8 @@ async def main() -> None:
     dp.message.register(update_handle_wrong_photo_input, UpdateProduct.waiting_photo)
     dp.message.register(update_handle_new_model, UpdateProduct.waiting_new_model, F.text)
     dp.message.register(update_handle_wrong_model_input, UpdateProduct.waiting_new_model)
+    dp.message.register(update_handle_new_description, UpdateProduct.waiting_description, F.text)
+    dp.message.register(update_handle_wrong_description_input, UpdateProduct.waiting_description)
     dp.message.register(handle_new_price, UpdateProduct.waiting_price, F.text)
     dp.message.register(update_handle_wrong_price_input, UpdateProduct.waiting_price)
     dp.message.register(handle_next, UpdateProduct.waiting_next, F.text)

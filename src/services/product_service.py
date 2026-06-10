@@ -13,6 +13,10 @@ from utils.normalize import normalize_model
 
 logger = logging.getLogger(__name__)
 
+# Sentinel distinguishing "argument not provided" from an explicit None, so an
+# update can clear an optional field (e.g. description) as well as leave it.
+_UNSET = object()
+
 
 @dataclass(frozen=True)
 class ProductMatch:
@@ -74,6 +78,7 @@ class ProductService:
         normalized_model: str | None = None,
         price: Decimal | None = None,
         image_path: str | None = None,
+        description: str | None | object = _UNSET,
     ) -> Product | None:
         async with SessionLocal() as session:
             product = await session.get(Product, product_id)
@@ -88,6 +93,9 @@ class ProductService:
                 product.price = price
             if image_path is not None:
                 product.image_path = image_path
+            # _UNSET means "leave as is"; an explicit None clears the description.
+            if description is not _UNSET:
+                product.description = description  # type: ignore[assignment]
 
             await session.commit()
             await session.refresh(product)

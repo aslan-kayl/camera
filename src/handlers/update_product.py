@@ -10,10 +10,13 @@ from sqlalchemy.exc import IntegrityError
 from keyboards import (
     CONTINUE_UPDATE_BUTTON,
     MAIN_MENU_BUTTON,
+    SKIP_BUTTON,
+    UPDATE_DESCRIPTION_BUTTON,
     UPDATE_MODEL_BUTTON,
     UPDATE_PHOTO_BUTTON,
     UPDATE_PRICE_BUTTON,
     cancel_keyboard,
+    description_keyboard,
     main_keyboard,
     update_field_keyboard,
     update_next_keyboard,
@@ -111,6 +114,12 @@ async def choose_field(message: Message, state: FSMContext) -> None:
     elif choice == UPDATE_MODEL_BUTTON:
         await state.set_state(UpdateProduct.waiting_new_model)
         await message.answer("Введите новую модель товара.", reply_markup=cancel_keyboard())
+    elif choice == UPDATE_DESCRIPTION_BUTTON:
+        await state.set_state(UpdateProduct.waiting_description)
+        await message.answer(
+            "Введите новое описание товара или нажмите «Пропустить», чтобы очистить.",
+            reply_markup=description_keyboard(),
+        )
     elif choice == UPDATE_PRICE_BUTTON:
         await state.set_state(UpdateProduct.waiting_price)
         await message.answer("Введите новую цену товара.", reply_markup=cancel_keyboard())
@@ -269,6 +278,31 @@ async def handle_new_model(
     await _finish_success(message, state, product, db_user)
 
 
+async def handle_new_description(
+    message: Message, state: FSMContext, db_user: User | None = None
+) -> None:
+    product_id = await _get_product_id(message, state)
+    if product_id is None:
+        return
+
+    text = (message.text or "").strip()
+    # Skip button or empty text clears the description (it is optional).
+    description = None if text == SKIP_BUTTON or not text else text
+
+    try:
+        product = await product_service.update_product(product_id, description=description)
+    except Exception:
+        logger.exception("Product description update failed: product_id=%s", product_id)
+        await _finish_failure(message, state)
+        return
+
+    if product is None:
+        await _finish_failure(message, state)
+        return
+
+    await _finish_success(message, state, product, db_user)
+
+
 async def handle_new_price(
     message: Message, state: FSMContext, db_user: User | None = None
 ) -> None:
@@ -306,6 +340,13 @@ async def handle_wrong_field_input(message: Message) -> None:
     await message.answer(
         "Выберите, что обновить, с помощью кнопок.",
         reply_markup=update_field_keyboard(),
+    )
+
+
+async def handle_wrong_description_input(message: Message) -> None:
+    await message.answer(
+        "Введите описание текстом или нажмите «Пропустить».",
+        reply_markup=description_keyboard(),
     )
 
 

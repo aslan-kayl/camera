@@ -7,7 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy.exc import IntegrityError
 
-from keyboards import cancel_keyboard, main_keyboard
+from keyboards import SKIP_BUTTON, cancel_keyboard, description_keyboard, main_keyboard
 from models import User
 from services.audit_service import AuditAction, AuditService
 from services.image_service import save_product_photo
@@ -77,6 +77,19 @@ async def handle_model(message: Message, state: FSMContext) -> None:
         return
 
     await state.update_data(model=model, normalized_model=normalized_model)
+    await state.set_state(AddProduct.waiting_description)
+    await message.answer(
+        "Введите описание товара или нажмите «Пропустить».",
+        reply_markup=description_keyboard(),
+    )
+
+
+async def handle_description(message: Message, state: FSMContext) -> None:
+    text = (message.text or "").strip()
+    # Description is optional: skip button or empty text means no description.
+    description = None if text == SKIP_BUTTON or not text else text
+
+    await state.update_data(description=description)
     await state.set_state(AddProduct.waiting_price)
     await message.answer("Введите цену товара.", reply_markup=cancel_keyboard())
 
@@ -96,6 +109,7 @@ async def handle_price(message: Message, state: FSMContext, db_user: User | None
     model = data.get("model", "")
     normalized_model = data.get("normalized_model") or normalize_model(model)
     image_path = data.get("image_path")
+    description = data.get("description")
 
     if not model or not normalized_model:
         logger.error(
@@ -130,6 +144,7 @@ async def handle_price(message: Message, state: FSMContext, db_user: User | None
             normalized_model=normalized_model,
             price=price,
             image_path=image_path,
+            description=description,
         )
     except IntegrityError:
         logger.info(
@@ -176,6 +191,7 @@ async def handle_price(message: Message, state: FSMContext, db_user: User | None
     await message.answer(
         "✅ Товар успешно добавлен\n\n"
         f"Модель:\n{product.model}\n\n"
+        f"Описание:\n{product.description or 'нет'}\n\n"
         f"Цена:\n{format_price(product.price)}",
         reply_markup=main_keyboard(),
     )
@@ -187,6 +203,13 @@ async def handle_wrong_photo_input(message: Message) -> None:
 
 async def handle_wrong_model_input(message: Message) -> None:
     await message.answer("Введите модель товара текстом.", reply_markup=cancel_keyboard())
+
+
+async def handle_wrong_description_input(message: Message) -> None:
+    await message.answer(
+        "Введите описание текстом или нажмите «Пропустить».",
+        reply_markup=description_keyboard(),
+    )
 
 
 async def handle_wrong_price_input(message: Message) -> None:

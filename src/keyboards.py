@@ -10,8 +10,10 @@ DELETE_CONFIRM_BUTTON = "✅ Удалить"
 UPDATE_PHOTO_BUTTON = "🖼 Обновить фото"
 UPDATE_MODEL_BUTTON = "🔤 Обновить модель"
 UPDATE_PRICE_BUTTON = "💰 Обновить цену"
+UPDATE_DESCRIPTION_BUTTON = "📝 Обновить описание"
 CONTINUE_UPDATE_BUTTON = "🔄 Продолжить обновление"
 MAIN_MENU_BUTTON = "🏠 Главное меню"
+SKIP_BUTTON = "⏭ Пропустить"
 
 
 def main_keyboard(is_admin: bool = True) -> ReplyKeyboardMarkup:
@@ -36,11 +38,21 @@ def update_field_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[
             [KeyboardButton(text=UPDATE_PHOTO_BUTTON)],
             [KeyboardButton(text=UPDATE_MODEL_BUTTON)],
+            [KeyboardButton(text=UPDATE_DESCRIPTION_BUTTON)],
             [KeyboardButton(text=UPDATE_PRICE_BUTTON)],
             [KeyboardButton(text=CANCEL_BUTTON)],
         ],
         resize_keyboard=True,
         input_field_placeholder="Выберите, что обновить, или нажмите Отмена",
+    )
+
+
+def description_keyboard() -> ReplyKeyboardMarkup:
+    # Description is optional, so the user can skip it (stored as empty).
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=SKIP_BUTTON)], [KeyboardButton(text=CANCEL_BUTTON)]],
+        resize_keyboard=True,
+        input_field_placeholder="Введите описание или нажмите «Пропустить»",
     )
 
 
