@@ -56,27 +56,46 @@ from handlers.update_product import handle_wrong_field_input as update_handle_wr
 from handlers.update_product import handle_wrong_model_input as update_handle_wrong_model_input
 from handlers.update_product import handle_wrong_photo_input as update_handle_wrong_photo_input
 from handlers.update_product import handle_wrong_price_input as update_handle_wrong_price_input
+from handlers.add_user import (
+    cancel_add_user,
+    choose_user_role,
+    handle_invite_start,
+    handle_wrong_role_input,
+    start_add_user,
+)
+from handlers.delete_user import (
+    choose_delete_role,
+    confirm_delete_user,
+    handle_wrong_delete_user_input,
+    select_user,
+    start_delete_user,
+)
 from import_excel import import_excel
 from keyboards import (
     ADD_PRODUCT_BUTTON,
+    ADD_USER_BUTTON,
+    BACK_BUTTON,
     CANCEL_BUTTON,
     DELETE_CONFIRM_BUTTON,
     DELETE_PRODUCT_BUTTON,
+    DELETE_USER_BUTTON,
     SEARCH_BUTTON,
     UPDATE_PRODUCT_BUTTON,
     UPLOAD_EXCEL_BUTTON,
     main_keyboard,
+    main_keyboard_for_role,
 )
 from middlewares.access import AccessControlMiddleware
 from models import Product, User
-from services.access_control import admin_only
+from services.access_control import admin_only, super_admin_only
 from services.audit_service import AuditAction, AuditService
 from services.ocr_service import OCRService
 from services.product_service import ProductService
 from services.temp_file_service import cleanup_old_temp_files, delete_temp_file, save_temp_photo
-from services.user_service import ROLE_ADMIN
 from states.add_product import AddProduct
+from states.add_user import AddUser
 from states.delete_product import DeleteProduct
+from states.delete_user import DeleteUser
 from states.update_product import UpdateProduct
 from utils.normalize import normalize_model
 
@@ -151,14 +170,14 @@ async def cmd_start(message: Message, role: str) -> None:
     await message.answer(
         "Отправьте модель или часть модели товара, например: <code>7108</code>.\n"
         "Можно также отправить фото этикетки товара для OCR-поиска.",
-        reply_markup=main_keyboard(is_admin=role == ROLE_ADMIN),
+        reply_markup=main_keyboard_for_role(role),
     )
 
 
 async def handle_search_button(message: Message, role: str) -> None:
     await message.answer(
         "Введите модель или часть модели товара.",
-        reply_markup=main_keyboard(is_admin=role == ROLE_ADMIN),
+        reply_markup=main_keyboard_for_role(role),
     )
 
 
@@ -384,9 +403,26 @@ async def main() -> None:
     # before business logic. Authorized users get a `role` injected into data.
     dp.message.outer_middleware(AccessControlMiddleware())
 
+    # Invite deep links (/start <token>) must be matched before the plain /start.
+    dp.message.register(handle_invite_start, CommandStart(deep_link=True))
     dp.message.register(cmd_start, CommandStart())
     dp.message.register(cmd_start, Command("help"))
     dp.message.register(handle_search_button, F.text == SEARCH_BUTTON)
+    # Inviting users/admins is SUPER_ADMIN-only.
+    dp.message.register(super_admin_only(start_add_user), F.text == ADD_USER_BUTTON)
+    dp.message.register(cancel_add_user, StateFilter(AddUser), F.text == BACK_BUTTON)
+    dp.message.register(choose_user_role, AddUser.waiting_role, F.text)
+    dp.message.register(handle_wrong_role_input, AddUser.waiting_role)
+
+    # Deleting users/admins is SUPER_ADMIN-only. Back steps to the previous
+    # screen (list -> role choice -> main menu), handled inside each state.
+    dp.message.register(super_admin_only(start_delete_user), F.text == DELETE_USER_BUTTON)
+    dp.message.register(choose_delete_role, DeleteUser.waiting_role, F.text)
+    dp.message.register(handle_wrong_delete_user_input, DeleteUser.waiting_role)
+    dp.message.register(select_user, DeleteUser.waiting_user, F.text)
+    dp.message.register(handle_wrong_delete_user_input, DeleteUser.waiting_user)
+    dp.message.register(confirm_delete_user, DeleteUser.waiting_confirm, F.text)
+    dp.message.register(handle_wrong_delete_user_input, DeleteUser.waiting_confirm)
     # Catalog mutations (Excel import, add/update/delete) are ADMIN-only - the
     # admin_only guard rejects non-admins before any flow can start.
     dp.message.register(admin_only(ask_excel_file), F.text == UPLOAD_EXCEL_BUTTON)

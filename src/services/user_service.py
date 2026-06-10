@@ -16,8 +16,14 @@ from models import User
 
 logger = logging.getLogger(__name__)
 
+ROLE_SUPER_ADMIN = "SUPER_ADMIN"
 ROLE_ADMIN = "ADMIN"
 ROLE_USER = "USER"
+
+# Roles allowed to mutate the catalog (add/update/delete products, import Excel).
+ADMIN_ROLES = frozenset({ROLE_ADMIN, ROLE_SUPER_ADMIN})
+# Roles a super admin may hand out via invite links.
+INVITABLE_ROLES = frozenset({ROLE_ADMIN, ROLE_USER})
 
 
 class UserService:
@@ -71,6 +77,26 @@ class UserService:
         )
         return user, True
 
+    async def list_by_role(self, role: str, limit: int = 50) -> list[User]:
+        async with SessionLocal() as session:
+            result = await session.scalars(
+                select(User).where(User.role == role).order_by(User.name).limit(limit)
+            )
+            return list(result)
+
+    async def delete_by_telegram_id(self, telegram_id: int) -> bool:
+        async with SessionLocal() as session:
+            user = await session.scalar(
+                select(User).where(User.telegram_id == telegram_id)
+            )
+            if user is None:
+                return False
+            await session.delete(user)
+            await session.commit()
+
+        logger.info("User deleted: telegram_id=%s", telegram_id)
+        return True
+
     async def set_role(self, telegram_id: int, role: str) -> User | None:
         async with SessionLocal() as session:
             user = await session.scalar(
@@ -87,4 +113,8 @@ class UserService:
 
     async def is_admin(self, telegram_id: int | None) -> bool:
         user = await self.get_by_telegram_id(telegram_id)
-        return user is not None and user.role == ROLE_ADMIN
+        return user is not None and user.role in ADMIN_ROLES
+
+    async def is_super_admin(self, telegram_id: int | None) -> bool:
+        user = await self.get_by_telegram_id(telegram_id)
+        return user is not None and user.role == ROLE_SUPER_ADMIN

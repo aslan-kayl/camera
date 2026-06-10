@@ -15,7 +15,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject
 
 from services.access_control import get_bootstrap_admin_ids
-from services.user_service import ROLE_ADMIN, ROLE_USER, UserService
+from services.user_service import ROLE_SUPER_ADMIN, ROLE_USER, UserService
 
 
 logger = logging.getLogger(__name__)
@@ -37,11 +37,16 @@ class AccessControlMiddleware(BaseMiddleware):
         telegram_id = user.id
         # name = Telegram first_name, falling back to username, then the id.
         name = user.first_name or user.username or str(telegram_id)
-        seed_role = ROLE_ADMIN if telegram_id in get_bootstrap_admin_ids() else ROLE_USER
+        is_bootstrap = telegram_id in get_bootstrap_admin_ids()
+        seed_role = ROLE_SUPER_ADMIN if is_bootstrap else ROLE_USER
 
         db_user, created = await user_service.get_or_create(
             telegram_id, name, role=seed_role
         )
+
+        # Keep the bootstrap owner a SUPER_ADMIN even if their row predates it.
+        if is_bootstrap and db_user.role != ROLE_SUPER_ADMIN:
+            db_user = await user_service.set_role(telegram_id, ROLE_SUPER_ADMIN)
 
         data["db_user"] = db_user
         data["role"] = db_user.role if db_user else ROLE_USER

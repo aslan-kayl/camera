@@ -62,6 +62,29 @@ class AuditLog(Base):
     )
 
 
+class Invite(Base):
+    """One-time invite link granting a role when the invitee opens it."""
+
+    __tablename__ = "invites"
+    __table_args__ = (
+        Index("uq_invites_token", "token", unique=True),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    token: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    created_by: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    used_by_telegram_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+
 class Product(Base):
     __tablename__ = "products"
     __table_args__ = (

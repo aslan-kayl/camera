@@ -72,6 +72,15 @@ async def init_db(drop_existing: bool = False) -> None:
                 "ON users (telegram_id)"
             )
         )
+        # A pre-existing users table may carry a CHECK that predates SUPER_ADMIN;
+        # relax it to the three current roles.
+        await conn.execute(text("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_role_check"))
+        await conn.execute(
+            text(
+                "ALTER TABLE users ADD CONSTRAINT users_role_check "
+                "CHECK (role IN ('SUPER_ADMIN', 'ADMIN', 'USER'))"
+            )
+        )
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_audit_log_user_id ON audit_log (user_id)")
         )
@@ -80,6 +89,9 @@ async def init_db(drop_existing: bool = False) -> None:
         )
         await conn.execute(
             text("CREATE INDEX IF NOT EXISTS ix_audit_log_action ON audit_log (action)")
+        )
+        await conn.execute(
+            text("CREATE UNIQUE INDEX IF NOT EXISTS uq_invites_token ON invites (token)")
         )
 
     logger.info("Database schema is ready")
