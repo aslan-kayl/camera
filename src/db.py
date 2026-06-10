@@ -22,11 +22,17 @@ DATABASE_URL = os.getenv(
     "postgresql+asyncpg://price:price@localhost:5433/price",
 )
 
+# The Postgres container defaults to UTC, so timestamps read back 5 hours behind
+# local time. Pin the session timezone (override via TIMEZONE in .env) so every
+# connection stores/returns timestamps in the user's local time.
+TIMEZONE = os.getenv("TIMEZONE", "Asia/Samarkand")
+
 engine = create_async_engine(
     DATABASE_URL,
     pool_pre_ping=True,
     pool_size=5,
     max_overflow=10,
+    connect_args={"server_settings": {"timezone": TIMEZONE}},
 )
 
 SessionLocal = async_sessionmaker(
@@ -52,6 +58,10 @@ async def session_scope() -> AsyncIterator[AsyncSession]:
 async def init_db(drop_existing: bool = False) -> None:
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
+        # Make local time the database default too, so external clients (psql,
+        # DBeaver) also display timestamps in the local timezone.
+        dbname = await conn.scalar(text("SELECT current_database()"))
+        await conn.execute(text(f'ALTER DATABASE "{dbname}" SET timezone TO \'{TIMEZONE}\''))
         if drop_existing:
             await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)

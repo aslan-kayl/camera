@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from decimal import Decimal
 from html import escape
 import logging
@@ -91,7 +92,7 @@ from services.access_control import admin_only, super_admin_only
 from services.audit_service import AuditAction, AuditService
 from services.ocr_service import OCRService
 from services.product_service import ProductService
-from services.temp_file_service import cleanup_old_temp_files, delete_temp_file, save_temp_photo
+from services.temp_file_service import cleanup_old_temp_files, save_temp_photo
 from states.add_product import AddProduct
 from states.add_user import AddUser
 from states.delete_product import DeleteProduct
@@ -102,6 +103,8 @@ from utils.normalize import normalize_model
 
 logger = logging.getLogger(__name__)
 UPLOAD_DIR = Path("data/uploads")
+# How often to sweep the temp photo folder (search photos live ~1 hour).
+TEMP_CLEANUP_INTERVAL_SECONDS = 10 * 60
 product_service = ProductService()
 ocr_service = OCRService()
 audit_service = AuditService()
@@ -109,6 +112,16 @@ audit_service = AuditService()
 
 class UploadExcel(StatesGroup):
     waiting_file = State()
+
+
+async def _periodic_temp_cleanup(interval_seconds: int = TEMP_CLEANUP_INTERVAL_SECONDS) -> None:
+    """Delete search photos older than an hour, on a recurring schedule."""
+    while True:
+        await asyncio.sleep(interval_seconds)
+        try:
+            cleanup_old_temp_files()
+        except Exception:
+            logger.exception("Periodic temp photo cleanup failed")
 
 
 def setup_logging() -> None:
@@ -293,15 +306,14 @@ async def handle_photo_search(message: Message, bot: Bot) -> None:
     logger.info("Photo search started: user_id=%s", user_id)
 
     photo = message.photo[-1]
+    # Kept in the temp folder and auto-removed after an hour by the periodic
+    # cleanup task - not deleted right after OCR.
     destination = await save_temp_photo(bot, photo)
 
     await message.answer("Фото получил, ща два сек")
 
     try:
-        try:
-            ocr_result = await ocr_service.recognize_models(destination)
-        finally:
-            delete_temp_file(destination)
+        ocr_result = await ocr_service.recognize_models(destination)
     except Exception as exc:
         logger.exception("OCR failed for image: %s", destination)
         await message.answer(f"Не удалось распознать фото: <code>{escape(str(exc))}</code>")
@@ -471,10 +483,16 @@ async def main() -> None:
     dp.message.register(handle_photo_search, F.photo)
     dp.message.register(handle_product_search, F.text)
 
+    # Background task that removes search photos older than an hour.
+    cleanup_task = asyncio.create_task(_periodic_temp_cleanup())
+
     try:
         logger.info("Bot polling started")
         await dp.start_polling(bot)
     finally:
+        cleanup_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await cleanup_task
         await bot.session.close()
         await close_db()
 
