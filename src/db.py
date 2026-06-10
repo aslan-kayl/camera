@@ -64,6 +64,23 @@ async def init_db(drop_existing: bool = False) -> None:
                 "ON products (normalized_model)"
             )
         )
+        # users / audit_log may pre-exist from an earlier schema, in which case
+        # create_all() leaves them untouched - ensure their indexes regardless.
+        await conn.execute(
+            text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_telegram_id "
+                "ON users (telegram_id)"
+            )
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_audit_log_user_id ON audit_log (user_id)")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_audit_log_created_at ON audit_log (created_at)")
+        )
+        await conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_audit_log_action ON audit_log (action)")
+        )
 
     logger.info("Database schema is ready")
 
