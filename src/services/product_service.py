@@ -3,12 +3,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import Decimal
 import logging
+import re
 
-from sqlalchemy import case, select
+from sqlalchemy import and_, case, or_, select
 
 from db import SessionLocal
 from models import Product
 from utils.normalize import normalize_model
+from utils.search import escape_ilike
 
 
 logger = logging.getLogger(__name__)
@@ -120,26 +122,60 @@ class ProductService:
         return True
 
     async def search_by_text(self, query: str) -> list[Product]:
-        normalized_query = normalize_model(query)
-        if not normalized_query:
+        raw_query = (query or "").strip()
+        if not raw_query:
             return []
 
-        async with SessionLocal() as session:
-            statement = (
-                select(Product)
-                .where(Product.normalized_model.ilike(f"%{normalized_query}%"))
-                .order_by(
-                    case((Product.normalized_model == normalized_query, 0), else_=1),
-                    Product.normalized_model,
+        normalized_query = normalize_model(raw_query)
+
+        # Split the query into words so multi-word searches work. Each token is
+        # matched ONLY against the model name (raw model + normalized code) -
+        # never the description, because words in the free-text description can
+        # belong to a different camera and would surface the wrong product. All
+        # tokens must match (AND) so extra words narrow the result.
+        tokens = [token for token in re.split(r"\s+", raw_query) if token]
+
+        conditions = []
+        for token in tokens:
+            token_like = f"%{escape_ilike(token)}%"
+            token_conditions = [
+                Product.model.ilike(token_like, escape="\\"),
+            ]
+            normalized_token = normalize_model(token)
+            if normalized_token:
+                token_conditions.append(
+                    Product.normalized_model.ilike(f"%{normalized_token}%")
+                )
+            conditions.append(or_(*token_conditions))
+
+        if not conditions:
+            return []
+
+        # Rank exact model code first, then model-code matches, then the rest
+        # (description-only matches), each group sorted by model.
+        order_by = []
+        if normalized_query:
+            order_by.append(
+                case((Product.normalized_model == normalized_query, 0), else_=1)
+            )
+            order_by.append(
+                case(
+                    (Product.normalized_model.ilike(f"%{normalized_query}%"), 0),
+                    else_=1,
                 )
             )
+        order_by.append(Product.normalized_model)
+
+        async with SessionLocal() as session:
+            statement = select(Product).where(and_(*conditions)).order_by(*order_by)
             result = await session.scalars(statement)
             products = list(result)
 
         logger.info(
-            "Text product search query=%r normalized=%r count=%s",
-            query,
+            "Text product search query=%r normalized=%r tokens=%s count=%s",
+            raw_query,
             normalized_query,
+            tokens,
             len(products),
         )
         return products

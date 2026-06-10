@@ -17,7 +17,6 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
     FSInputFile,
     Message,
-    ReplyKeyboardRemove,
 )
 
 from db import close_db, init_db
@@ -83,7 +82,7 @@ from keyboards import (
     SEARCH_BUTTON,
     UPDATE_PRODUCT_BUTTON,
     UPLOAD_EXCEL_BUTTON,
-    main_keyboard,
+    cancel_keyboard,
     main_keyboard_for_role,
 )
 from middlewares.access import AccessControlMiddleware
@@ -197,13 +196,27 @@ async def handle_search_button(message: Message, role: str) -> None:
 async def ask_excel_file(message: Message, state: FSMContext) -> None:
     await state.set_state(UploadExcel.waiting_file)
     await message.answer(
-        "Отправьте Excel-файл в формате <code>.xlsx</code>.",
-        reply_markup=ReplyKeyboardRemove(),
+        "Отправьте Excel-файл в формате <code>.xlsx</code> "
+        "или нажмите «❌ Отмена», чтобы прервать загрузку.",
+        reply_markup=cancel_keyboard(),
+    )
+
+
+async def cancel_excel_upload(
+    message: Message, state: FSMContext, role: str | None = None
+) -> None:
+    await state.clear()
+    await message.answer(
+        "Загрузка Excel отменена.", reply_markup=main_keyboard_for_role(role)
     )
 
 
 async def handle_excel_upload(
-    message: Message, state: FSMContext, bot: Bot, db_user: User
+    message: Message,
+    state: FSMContext,
+    bot: Bot,
+    db_user: User,
+    role: str | None = None,
 ) -> None:
     user_id = message.from_user.id if message.from_user else None
     db_user_id = db_user.id if db_user else None
@@ -257,7 +270,7 @@ async def handle_excel_upload(
             "<code>Описание/Description</code>, "
             "<code>Цена/Price</code>.\n\n"
             f"Ошибка: <code>{escape(str(exc))}</code>",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         await state.clear()
         return
@@ -277,7 +290,7 @@ async def handle_excel_upload(
     )
     await message.answer(
         f"Импорт завершен. Загружено товаров: <b>{imported_count}</b>.",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard_for_role(role),
     )
 
 
@@ -438,6 +451,7 @@ async def main() -> None:
     # Catalog mutations (Excel import, add/update/delete) are ADMIN-only - the
     # admin_only guard rejects non-admins before any flow can start.
     dp.message.register(admin_only(ask_excel_file), F.text == UPLOAD_EXCEL_BUTTON)
+    dp.message.register(cancel_excel_upload, UploadExcel.waiting_file, F.text == CANCEL_BUTTON)
     dp.message.register(admin_only(handle_excel_upload), UploadExcel.waiting_file, F.document)
     dp.message.register(handle_wrong_excel_upload, UploadExcel.waiting_file)
 

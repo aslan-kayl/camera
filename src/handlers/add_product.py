@@ -7,7 +7,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 from sqlalchemy.exc import IntegrityError
 
-from keyboards import SKIP_BUTTON, cancel_keyboard, description_keyboard, main_keyboard
+from keyboards import (
+    SKIP_BUTTON,
+    cancel_keyboard,
+    description_keyboard,
+    main_keyboard_for_role,
+)
 from models import User
 from services.audit_service import AuditAction, AuditService
 from services.image_service import save_product_photo
@@ -37,9 +42,13 @@ async def start_add_product(message: Message, state: FSMContext) -> None:
     )
 
 
-async def cancel_add_product(message: Message, state: FSMContext) -> None:
+async def cancel_add_product(
+    message: Message, state: FSMContext, role: str | None = None
+) -> None:
     await state.clear()
-    await message.answer("Добавление товара отменено.", reply_markup=main_keyboard())
+    await message.answer(
+        "Добавление товара отменено.", reply_markup=main_keyboard_for_role(role)
+    )
 
 
 async def handle_photo(message: Message, state: FSMContext, bot: Bot) -> None:
@@ -94,7 +103,12 @@ async def handle_description(message: Message, state: FSMContext) -> None:
     await message.answer("Введите цену товара.", reply_markup=cancel_keyboard())
 
 
-async def handle_price(message: Message, state: FSMContext, db_user: User | None = None) -> None:
+async def handle_price(
+    message: Message,
+    state: FSMContext,
+    db_user: User | None = None,
+    role: str | None = None,
+) -> None:
     raw_price = (message.text or "").strip()
     price = parse_decimal(raw_price)
 
@@ -119,7 +133,7 @@ async def handle_price(message: Message, state: FSMContext, db_user: User | None
         await state.clear()
         await message.answer(
             "❌ Товар не добавлен: данные сессии потеряны. Начните заново.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
 
@@ -134,7 +148,7 @@ async def handle_price(message: Message, state: FSMContext, db_user: User | None
         await state.clear()
         await message.answer(
             "❌ Товар не добавлен: такой товар уже существует.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
 
@@ -156,7 +170,7 @@ async def handle_price(message: Message, state: FSMContext, db_user: User | None
         await state.clear()
         await message.answer(
             "❌ Товар не добавлен: такой товар уже существует.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
     except Exception:
@@ -169,7 +183,7 @@ async def handle_price(message: Message, state: FSMContext, db_user: User | None
         await state.clear()
         await message.answer(
             "❌ Товар не добавлен. Попробуйте позже.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
 
@@ -193,7 +207,7 @@ async def handle_price(message: Message, state: FSMContext, db_user: User | None
         f"Модель:\n{product.model}\n\n"
         f"Описание:\n{product.description or 'нет'}\n\n"
         f"Цена:\n{format_price(product.price)}",
-        reply_markup=main_keyboard(),
+        reply_markup=main_keyboard_for_role(role),
     )
 
 

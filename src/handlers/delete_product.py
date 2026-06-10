@@ -5,7 +5,7 @@ import logging
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from keyboards import cancel_keyboard, confirm_delete_keyboard, main_keyboard
+from keyboards import cancel_keyboard, confirm_delete_keyboard, main_keyboard_for_role
 from models import User
 from services.audit_service import AuditAction, AuditService
 from services.product_service import ProductService
@@ -34,12 +34,18 @@ async def start_delete_product(message: Message, state: FSMContext) -> None:
     )
 
 
-async def cancel_delete_product(message: Message, state: FSMContext) -> None:
+async def cancel_delete_product(
+    message: Message, state: FSMContext, role: str | None = None
+) -> None:
     await state.clear()
-    await message.answer("Удаление товара отменено.", reply_markup=main_keyboard())
+    await message.answer(
+        "Удаление товара отменено.", reply_markup=main_keyboard_for_role(role)
+    )
 
 
-async def handle_model(message: Message, state: FSMContext) -> None:
+async def handle_model(
+    message: Message, state: FSMContext, role: str | None = None
+) -> None:
     model = (message.text or "").strip()
     normalized_model = normalize_model(model)
 
@@ -58,7 +64,7 @@ async def handle_model(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer(
             "❌ Товар не найден. Проверьте модель и попробуйте снова.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
 
@@ -87,7 +93,10 @@ async def handle_model(message: Message, state: FSMContext) -> None:
 
 
 async def confirm_delete_product(
-    message: Message, state: FSMContext, db_user: User | None = None
+    message: Message,
+    state: FSMContext,
+    db_user: User | None = None,
+    role: str | None = None,
 ) -> None:
     data = await state.get_data()
     product_id = data.get("product_id")
@@ -96,7 +105,7 @@ async def confirm_delete_product(
         await state.clear()
         await message.answer(
             "❌ Товар не удалён: данные сессии потеряны. Начните заново.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
 
@@ -111,7 +120,7 @@ async def confirm_delete_product(
         await state.clear()
         await message.answer(
             "❌ Товар не удалён. Попробуйте позже.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
 
@@ -119,7 +128,7 @@ async def confirm_delete_product(
     if not deleted:
         await message.answer(
             "❌ Товар не удалён: он уже отсутствует в базе.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
 
@@ -135,7 +144,7 @@ async def confirm_delete_product(
         user_id=db_user.id if db_user else None,
         details=f"id={product_id}",
     )
-    await message.answer("✅ Товар удалён.", reply_markup=main_keyboard())
+    await message.answer("✅ Товар удалён.", reply_markup=main_keyboard_for_role(role))
 
 
 async def handle_wrong_model_input(message: Message) -> None:

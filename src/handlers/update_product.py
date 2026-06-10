@@ -17,7 +17,7 @@ from keyboards import (
     UPDATE_PRICE_BUTTON,
     cancel_keyboard,
     description_keyboard,
-    main_keyboard,
+    main_keyboard_for_role,
     update_field_keyboard,
     update_next_keyboard,
 )
@@ -50,12 +50,18 @@ async def start_update_product(message: Message, state: FSMContext) -> None:
     )
 
 
-async def cancel_update_product(message: Message, state: FSMContext) -> None:
+async def cancel_update_product(
+    message: Message, state: FSMContext, role: str | None = None
+) -> None:
     await state.clear()
-    await message.answer("Обновление товара отменено.", reply_markup=main_keyboard())
+    await message.answer(
+        "Обновление товара отменено.", reply_markup=main_keyboard_for_role(role)
+    )
 
 
-async def handle_model(message: Message, state: FSMContext) -> None:
+async def handle_model(
+    message: Message, state: FSMContext, role: str | None = None
+) -> None:
     model = (message.text or "").strip()
     normalized_model = normalize_model(model)
 
@@ -73,7 +79,7 @@ async def handle_model(message: Message, state: FSMContext) -> None:
         await state.clear()
         await message.answer(
             "❌ Товар не найден. Проверьте модель и попробуйте снова.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
 
@@ -130,14 +136,16 @@ async def choose_field(message: Message, state: FSMContext) -> None:
         )
 
 
-async def _get_product_id(message: Message, state: FSMContext) -> int | None:
+async def _get_product_id(
+    message: Message, state: FSMContext, role: str | None = None
+) -> int | None:
     data = await state.get_data()
     product_id = data.get("product_id")
     if not product_id:
         await state.clear()
         await message.answer(
             "❌ Товар не обновлён: данные сессии потеряны. Начните заново.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return None
     return product_id
@@ -170,11 +178,13 @@ async def _finish_success(
     )
 
 
-async def handle_next(message: Message, state: FSMContext) -> None:
+async def handle_next(
+    message: Message, state: FSMContext, role: str | None = None
+) -> None:
     choice = (message.text or "").strip()
 
     if choice == CONTINUE_UPDATE_BUTTON:
-        product_id = await _get_product_id(message, state)
+        product_id = await _get_product_id(message, state, role)
         if product_id is None:
             return
         product = await product_service.get_by_id(product_id)
@@ -182,13 +192,13 @@ async def handle_next(message: Message, state: FSMContext) -> None:
             await state.clear()
             await message.answer(
                 "❌ Товар больше не найден. Начните заново.",
-                reply_markup=main_keyboard(),
+                reply_markup=main_keyboard_for_role(role),
             )
             return
         await _show_field_menu(message, state, product)
     elif choice == MAIN_MENU_BUTTON:
         await state.clear()
-        await message.answer("Главное меню.", reply_markup=main_keyboard())
+        await message.answer("Главное меню.", reply_markup=main_keyboard_for_role(role))
     else:
         await message.answer(
             "Выберите действие с помощью кнопок.",
@@ -196,15 +206,24 @@ async def handle_next(message: Message, state: FSMContext) -> None:
         )
 
 
-async def _finish_failure(message: Message, state: FSMContext) -> None:
+async def _finish_failure(
+    message: Message, state: FSMContext, role: str | None = None
+) -> None:
     await state.clear()
-    await message.answer("❌ Товар не обновлён. Попробуйте позже.", reply_markup=main_keyboard())
+    await message.answer(
+        "❌ Товар не обновлён. Попробуйте позже.",
+        reply_markup=main_keyboard_for_role(role),
+    )
 
 
 async def handle_new_photo(
-    message: Message, state: FSMContext, bot: Bot, db_user: User | None = None
+    message: Message,
+    state: FSMContext,
+    bot: Bot,
+    db_user: User | None = None,
+    role: str | None = None,
 ) -> None:
-    product_id = await _get_product_id(message, state)
+    product_id = await _get_product_id(message, state, role)
     if product_id is None:
         return
 
@@ -217,20 +236,23 @@ async def handle_new_photo(
         product = await product_service.update_product(product_id, image_path=image_path)
     except Exception:
         logger.exception("Product photo update failed: product_id=%s", product_id)
-        await _finish_failure(message, state)
+        await _finish_failure(message, state, role)
         return
 
     if product is None:
-        await _finish_failure(message, state)
+        await _finish_failure(message, state, role)
         return
 
     await _finish_success(message, state, product, db_user)
 
 
 async def handle_new_model(
-    message: Message, state: FSMContext, db_user: User | None = None
+    message: Message,
+    state: FSMContext,
+    db_user: User | None = None,
+    role: str | None = None,
 ) -> None:
-    product_id = await _get_product_id(message, state)
+    product_id = await _get_product_id(message, state, role)
     if product_id is None:
         return
 
@@ -249,7 +271,7 @@ async def handle_new_model(
         await state.clear()
         await message.answer(
             "❌ Товар не обновлён: такой товар уже существует.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
 
@@ -263,25 +285,28 @@ async def handle_new_model(
         await state.clear()
         await message.answer(
             "❌ Товар не обновлён: такой товар уже существует.",
-            reply_markup=main_keyboard(),
+            reply_markup=main_keyboard_for_role(role),
         )
         return
     except Exception:
         logger.exception("Product model update failed: product_id=%s", product_id)
-        await _finish_failure(message, state)
+        await _finish_failure(message, state, role)
         return
 
     if product is None:
-        await _finish_failure(message, state)
+        await _finish_failure(message, state, role)
         return
 
     await _finish_success(message, state, product, db_user)
 
 
 async def handle_new_description(
-    message: Message, state: FSMContext, db_user: User | None = None
+    message: Message,
+    state: FSMContext,
+    db_user: User | None = None,
+    role: str | None = None,
 ) -> None:
-    product_id = await _get_product_id(message, state)
+    product_id = await _get_product_id(message, state, role)
     if product_id is None:
         return
 
@@ -293,20 +318,23 @@ async def handle_new_description(
         product = await product_service.update_product(product_id, description=description)
     except Exception:
         logger.exception("Product description update failed: product_id=%s", product_id)
-        await _finish_failure(message, state)
+        await _finish_failure(message, state, role)
         return
 
     if product is None:
-        await _finish_failure(message, state)
+        await _finish_failure(message, state, role)
         return
 
     await _finish_success(message, state, product, db_user)
 
 
 async def handle_new_price(
-    message: Message, state: FSMContext, db_user: User | None = None
+    message: Message,
+    state: FSMContext,
+    db_user: User | None = None,
+    role: str | None = None,
 ) -> None:
-    product_id = await _get_product_id(message, state)
+    product_id = await _get_product_id(message, state, role)
     if product_id is None:
         return
 
@@ -322,11 +350,11 @@ async def handle_new_price(
         product = await product_service.update_product(product_id, price=price)
     except Exception:
         logger.exception("Product price update failed: product_id=%s", product_id)
-        await _finish_failure(message, state)
+        await _finish_failure(message, state, role)
         return
 
     if product is None:
-        await _finish_failure(message, state)
+        await _finish_failure(message, state, role)
         return
 
     await _finish_success(message, state, product, db_user)
